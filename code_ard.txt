@@ -1,0 +1,405 @@
+//Inicializar las librerias y componentes:
+#include <LiquidCrystal.h>
+#include <Servo.h>
+#include <Keypad.h>
+
+//Definicion de pines y constantes:
+const int servoPin = 11;
+Servo myServo;
+
+const int pot1 = A0;
+const int pot2 = A1;
+
+const byte ROWS = 4;
+const byte COLS = 4;
+
+//configura la matriz de teclas con sus respectivos valores.
+char keys[ROWS][COLS] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+
+//constantes que especifican las filas y columnas 
+//del teclado matricial respectivamente.
+byte rowPins[ROWS] = {12, 10, 9, 8};
+byte colPins[COLS] = {7, 6, 5, 4};
+
+//Se crea una variable teclado del tipo Keypad con la configuración previamente definida
+Keypad teclado = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+//Se inicializa el objeto lcd del tipo LiquidCrystal con 
+//los pines para controlar el LCD
+LiquidCrystal lcd(2, 3, A2, A3, A4, A5);
+
+//Se definen y se inicializan varias variables booleanas 
+//y arreglos para gestionar el estado y la información del 
+//sistema. Estos incluyen la configuración del backlight, 
+//el estado de la pantalla, la programación de la clave, 
+//entre otros.
+const int backlightPin = 13;
+bool backlightState = true;
+bool pantallaEncendida = false;
+bool informacionMostrada = false;
+bool cambioAngulo = false;
+
+int nuevaClave[4] = { -1, -1, -1, -1 };
+int contadorTeclas = 0;
+bool programandoClave = false;
+bool claveGrabada = false;
+unsigned long lastPotentiometerReadTime = 0; // Variable para controlar la lectura de potenciómetros
+
+void setup() {
+  //Configuración de pines y dispositivos:
+  //Se configura el pin del backlight como salida 
+  //y se enciende inicialmente
+  pinMode(backlightPin, OUTPUT);
+  digitalWrite(backlightPin, HIGH);
+
+  //Se inicializa la comunicación con el LCD 
+  //con una configuración de 16 columnas y 2 filas.
+  lcd.begin(16, 2);
+  
+  //Se adjunta el servo motor al pin servoPin.
+  myServo.attach(servoPin);
+
+  lcd.print("*");
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Obtener el tiempo actual en milisegundos desde 
+  //que se inició el programa
+  unsigned long currentMillis = millis();
+  
+  //// Leer la tecla presionada desde el teclado 
+  //(o dispositivo de entrada)
+  char key = teclado.getKey();
+  
+  // Determinar si se permite la lectura del potenciómetro 
+  //según el tiempo transcurrido
+  bool potentiometerReadAllowed = (currentMillis - lastPotentiometerReadTime >= 100); 
+  
+  // Comprobación de la tecla presionada
+  if (key == '#') {     
+    cambiarBacklight();//Cambiar el retroiluminado o brillo
+    if (!pantallaEncendida) { // Encender la pantalla si no está encendida
+      lcd.begin(16, 2); 
+      // Iniciar la pantalla LCD con dimensiones 16x2
+      
+       // Si la información no se ha mostrado previamente, borrar la pantalla y mostrar información
+      if (!informacionMostrada) {
+        lcd.clear();
+        mostrarInformacionPantalla();// Mostrar información específica en la pantalla
+        informacionMostrada = true;// Marcar que la información ha sido mostrada
+      }
+      pantallaEncendida = true;// Marcar que la pantalla está encendida
+    }
+    delay(200);
+  } else if (key == 'B') {
+    // Cambiar algún tipo de modo (posiblemente del sistema o dispositivo)
+    cambiarModo();
+    informacionMostrada = false;// Establecer que no se está mostrando información
+    pantallaEncendida = true;
+    
+  } else if (key == '*') {
+    // Manejar la programación de una clave
+    if (programandoClave) {
+      finalizarProgramacionClave();// Finalizar el proceso de programación de clave
+    } else {
+      iniciarProgramacionClave();// Iniciar el proceso de programación de clave
+    }
+    informacionMostrada = false;
+  } else if (programandoClave && esDigito(key)) {
+    // Procesar un dígito si se está programando una clave
+    procesarDigito(key);
+    informacionMostrada = false;
+  } else if (informacionMostrada && (key == 'D' || key == 'A' || key == 'C' || key == '3')) {
+    // Verificar una secuencia específica si se está mostrando información
+    verificarSecuencia(key);
+  }
+  
+  // Mostrar una clave en la pantalla si la tecla presionada es 'A'
+  if (key == 'A') {
+    mostrarClaveEnPantalla();
+  }
+  
+  // Ingresar una clave inversa si la tecla presionada es 'C'
+  if (key == 'C') {
+    ingresarClaveInversa();
+    informacionMostrada = false;
+  }
+  
+  // Leer los potenciómetros y mostrar ángulos si está permitido y se cumple cierta condición
+  if (potentiometerReadAllowed && cambioAngulo && !informacionMostrada) {
+    leerPotenciometrosYMostrarAngulos();
+    lastPotentiometerReadTime = currentMillis;// Actualizar el tiempo de la última lectura del potenciómetro
+  }
+  
+  }
+
+void cambiarBacklight() {
+  // Invierte el estado actual del backlight
+  backlightState = !backlightState;
+  // Cambia el estado del pin de salida (backlightPin) dependiendo del estado actual del backlight
+  digitalWrite(backlightPin, backlightState ? HIGH : LOW);
+}
+
+void cambiarModo() {
+  // Si se está programando una clave, se finaliza el proceso de programación de clave
+  if (programandoClave) {
+    finalizarProgramacionClave();
+  }
+  // Invierte el estado actual de cambioAngulo
+  cambioAngulo = !cambioAngulo;
+  
+  lcd.clear();// Limpia la pantalla LCD
+  lcd.setCursor(0, 1);// Configura el cursor en la segunda línea de la pantalla LCD e imprime un mensaje
+  lcd.print("Cambio de Angulo");
+  delay(1000);
+  lcd.clear();
+  // Configura el cursor en la primera línea de la pantalla LCD e imprime un mensaje
+  lcd.setCursor(0, 0);
+  lcd.print("Presiona #");
+}
+
+void iniciarProgramacionClave() {
+  // Establece la variable programandoClave en true para indicar que se está programando una clave
+  programandoClave = true;
+  lcd.clear();
+  // Configura el cursor en la segunda línea (fila 1) de la pantalla LCD e imprime "Programacion"
+  lcd.setCursor(0, 1);
+  lcd.print("Programacion");
+  // Configura el cursor en la primera línea (fila 0) de la pantalla LCD e imprime "----"
+  lcd.setCursor(0, 0);
+  lcd.print("----");
+}
+
+void procesarDigito(char key) {
+  // Verifica si el contador de teclas es menor que 4
+  if (contadorTeclas < 4) {
+    // Almacena el dígito ingresado en un arreglo para la nueva clave
+    // El dígito se guarda como un número entero (posiblemente para formar la clave)
+    nuevaClave[contadorTeclas] = key - '0';
+    // Incrementa el contador de teclas
+    contadorTeclas++;
+    // Llama a la función para actualizar el display relacionado con la clave
+    actualizarDisplayClave();
+  }
+}
+
+void finalizarProgramacionClave() {
+  // Configura el cursor en la segunda línea (fila 1) de la pantalla LCD
+  lcd.setCursor(0, 1);
+  // Verifica si se han ingresado 4 dígitos para la clave
+  if (contadorTeclas == 4) {
+    // Si se han ingresado 4 dígitos, muestra "Clave grabada" en la pantalla LCD
+    lcd.print("Clave grabada");
+    // Marca que la clave ha sido grabada con éxito
+    claveGrabada = true;
+    delay(2000);
+  } else {
+    // Si no se han ingresado 4 dígitos, muestra "Falla" en la pantalla LCD
+    lcd.print("Falla       ");
+    delay(2000);
+  }
+  // Reinicia el contador de teclas a 0
+  contadorTeclas = 0;
+  // Establece que ya no se está programando la clave
+  programandoClave = false;
+  lcd.clear();
+}
+
+void actualizarDisplayClave() {
+  //Configura el cursor en la primera línea (fila 0) de la pantalla LCD
+  lcd.setCursor(0, 0);
+  //Itera a través de los elementos del arreglo nuevaClave
+  for (int i = 0; i < 4; i++) {
+    //Comprueba si el elemento actual de nuevaClave no es -1
+    if (nuevaClave[i] != -1) {
+      //Si el elemento es diferente de -1, imprime el dígito en la pantalla LCD
+      lcd.print(nuevaClave[i]);
+    } else {
+      //Si el elemento es -1, imprime un guion '-' en la pantalla LCD
+      lcd.print("-");
+    }
+  }
+}
+
+bool esDigito(char key) {
+  //Verifica si el carácter key está dentro del rango '0' a '9'
+  return (key >= '0' && key <= '9');
+}
+
+void ajustarAngulos() {
+  //Lee el valor del potenciómetro 1 y mapea el valor leído al rango de 0 a 45 grados
+  int anguloInicial = map(analogRead(pot1), 0, 1023, 0, 45);
+  //Lee el valor del potenciómetro 2 y mapea el valor leído al rango de 150 a 180 grados
+  int anguloFinal = map(analogRead(pot2), 0, 1023, 150, 180);
+
+  lcd.clear();
+  //Configura el cursor en la primera línea (fila 0) de la pantalla LCD e imprime los ángulos iniciales y finales
+  lcd.setCursor(0, 0);
+  lcd.print("A:" + String(anguloInicial) + " C:" + String(anguloFinal));
+  //Configura el cursor en la segunda línea (fila 1) de la pantalla LCD y muestra un conjunto de asteriscos
+  lcd.setCursor((16 - 4) / 2, 1);
+  lcd.print("****");
+  //Controla el servo motor y lo mueve al ángulo inicial leído del potenciómetro 1
+  myServo.write(anguloInicial);
+}
+
+void mostrarInformacionPantalla() {
+  //Configura el cursor en la segunda línea (fila 1) de la pantalla LCD y muestra el mensaje "informacion"
+  lcd.setCursor(0, 1);
+  lcd.setCursor(0, 1);
+  lcd.print("informacion");
+  //Configura el cursor en la primera línea (fila 0) de la pantalla LCD y borra el contenido mostrando espacios en blanco
+  lcd.setCursor(0, 0);
+  lcd.print("                ");
+}
+
+void verificarSecuencia(char key) {
+  //Definición de una secuencia de caracteres a verificar
+  static char secuencia[] = {'D', '3'};
+  //Índice para seguir el progreso dentro de la secuencia
+  static int index = 0;
+  //Verifica si el carácter actual coincide con el carácter en la secuencia en la posición 'index'
+  if (key == secuencia[index]) {
+    //Incrementa el índice para avanzar en la secuencia
+    index++;
+    //Verifica si se ha alcanzado el final de la secuencia
+    if (index == sizeof(secuencia)) {
+      lcd.clear();
+      //Configura el cursor en la posición (0, 0) de la pantalla LCD y muestra la nueva clave
+      lcd.setCursor(0, 0);
+      for (int i = 0; i < 4; i++) {
+        lcd.print(nuevaClave[i]);
+      }
+      delay(2000);
+      //Realiza ajustes en los ángulos
+      ajustarAngulos();      
+      //Establece que la información ya no está mostrada en la pantallainformacionMostrada = false;
+      lcd.clear();
+      //Configura el cursor en la posición central de la segunda línea y muestra asteriscos
+      lcd.setCursor((16 - 4) / 2, 1);
+      lcd.print("****");
+      //Reinicia el índice para la próxima verificación de secuencia
+      index = 0;
+      //Muestra por el puerto serie (serial) la clave que se ha grabado
+      Serial.println("Clave grabada: ");
+      for (int i = 0; i < 4; i++) {
+        Serial.print(nuevaClave[i]);
+      }
+      Serial.println();
+    }
+  } else {
+    //Imprime un mensaje en el puerto serie si la secuencia ingresada es incorrecta
+    Serial.println("Secuencia incorrecta");
+    //Reinicia el índice para la próxima verificación de secuencia
+    index = 0;
+  }
+}
+
+void mostrarAngulosEnDisplay(int anguloInicial, int anguloFinal) {
+  lcd.clear();
+  //Configura el cursor en la primera línea (fila 0) de la pantalla LCD y muestra los ángulos inicial y final
+  lcd.setCursor(0, 0);
+  lcd.print("A:" + String(anguloInicial) + " C:" + String(anguloFinal));
+  //Configura el cursor en la segunda línea (fila 1) de la pantalla LCD y muestra una serie de asteriscos
+  lcd.setCursor((16 - 4) / 2, 1);
+  lcd.print("****");
+}
+
+void leerPotenciometrosYMostrarAngulos() {
+  //Lee el valor del potenciómetro 1 y mapea el valor leído al rango de 0 a 45 grados
+  int anguloInicial = map(analogRead(pot1), 0, 1023, 0, 45);
+  //Lee el valor del potenciómetro 2 y mapea el valor leído al rango de 150 a 180 grados
+  int anguloFinal = map(analogRead(pot2), 0, 1023, 150, 180);
+  //Muestra los ángulos inicial y final en la pantalla LCD
+  mostrarAngulosEnDisplay(anguloInicial, anguloFinal);
+  //Controla el servo motor y lo mueve al ángulo inicial leído del potenciómetro 1
+  myServo.write(anguloInicial); // Mover el servo al ángulo inicial
+}
+
+void mostrarClaveEnPantalla() {
+  lcd.clear();
+  //Configura el cursor en la segunda línea (fila 1) de la pantalla LCD y muestra "Ingrese clave:"
+  lcd.setCursor(0, 1);
+  lcd.print("Ingrese clave:");
+  //Configura el cursor en la primera línea (fila 0) de la pantalla LCD y muestra "****"
+  lcd.setCursor(0, 0);
+  lcd.print("****");
+  //Arreglo para almacenar la clave ingresada por el usuario
+  char claveIngresada[4];
+  //Contador para rastrear la cantidad de teclas ingresadas
+  int contadorTeclasIngresadas = 0;
+  //Bucle para ingresar la clave de 4 dígitos
+  while (contadorTeclasIngresadas < 4) {
+    char teclaIngresada = teclado.getKey();
+    //Verifica si la tecla presionada es un dígito
+    if (esDigito(teclaIngresada)) {
+      //Almacena la tecla ingresada en el arreglo de la clave
+      claveIngresada[contadorTeclasIngresadas] = teclaIngresada;
+      //Configura el cursor en la posición correspondiente de la primera línea y muestra la tecla ingresada
+      lcd.setCursor(contadorTeclasIngresadas, 0);
+      lcd.print(teclaIngresada);
+      //Incrementa el contador de teclas ingresadas
+      contadorTeclasIngresadas++;
+      delay(500); // Pequeño retardo para evitar la captura rápida de teclas adyacentes
+    }
+  }
+
+  delay(2000); //Muestra la clave ingresada por 2 segundos
+
+  lcd.clear();
+  lcd.setCursor(0, 1);
+  lcd.print("Abre Barrera");
+  delay(2000); //Muestra "Abre Barrera" por 2 segundos
+
+  lcd.clear();
+  //Configura el cursor en el centro de la segunda línea y muestra "****"
+  lcd.setCursor((16 - 4) / 2, 1);
+  lcd.print("****");
+}
+
+void ingresarClaveInversa() {
+  lcd.clear();
+  lcd.setCursor(0, 1);
+  lcd.print("Ingrese clave:");
+  lcd.setCursor(0, 0);
+  lcd.print("****");
+
+  char claveInversa[4];
+  int contadorTeclasIngresadas = 0;
+
+  while (contadorTeclasIngresadas < 4) {
+    char teclaIngresada = teclado.getKey();
+    
+    if (esDigito(teclaIngresada)) {
+      claveInversa[contadorTeclasIngresadas] = teclaIngresada;
+      lcd.setCursor(contadorTeclasIngresadas, 0);
+      lcd.print(teclaIngresada);
+      contadorTeclasIngresadas++;
+      delay(500); // Pequeño retardo para evitar la captura rápida de teclas adyacentes
+    }
+  }
+
+  // Mostrar la clave ingresada en la primera línea
+  lcd.setCursor(0, 0);
+  for (int i = 0; i < 4; i++) {
+    lcd.print(claveInversa[i]);
+  }
+
+  delay(2000); // Muestra la clave ingresada por 2 segundos
+
+  lcd.clear();
+  lcd.setCursor(0, 1);
+  lcd.print("Cierra barrera");
+  delay(2000); // Muestra "Cierra barrera" por 2 segundos
+
+  // Restaurar los asteriscos en la primera línea
+  lcd.clear();
+  lcd.setCursor((16 - 4) / 2, 0);
+  lcd.print("****");
+}
